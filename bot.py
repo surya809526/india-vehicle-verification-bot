@@ -1,7 +1,9 @@
 import os
 import re
+import json
 import asyncio
 import tempfile
+import urllib.request
 from collections import Counter
 
 import cv2
@@ -22,7 +24,16 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 PORT = int(os.getenv("PORT", "10000"))
 
 # =========================================================
-# INDIAN STATE / UT CODES
+# ALL INDIA RTO DATABASE
+# =========================================================
+
+RTO_API = "https://trafficchallan.com/api/rto-codes.json"
+
+RTO_DB = {}
+
+
+# =========================================================
+# STATE FALLBACK
 # =========================================================
 
 STATE_CODES = {
@@ -31,6 +42,7 @@ STATE_CODES = {
     "AS": "Assam",
     "BR": "Bihar",
     "CG": "Chhattisgarh",
+    "CH": "Chandigarh",
     "GA": "Goa",
     "GJ": "Gujarat",
     "HR": "Haryana",
@@ -58,116 +70,235 @@ STATE_CODES = {
     "UK": "Uttarakhand",
     "UP": "Uttar Pradesh",
     "WB": "West Bengal",
-    "AN": "Andaman and Nicobar Islands",
-    "CH": "Chandigarh",
     "DL": "Delhi",
+    "AN": "Andaman and Nicobar Islands",
     "DN": "Dadra and Nagar Haveli and Daman and Diu",
-}
-
-# =========================================================
-# RTO REFERENCE
-# =========================================================
-
-RTO_CODES = {
-    "UP14": "Ghaziabad",
-    "UP15": "Meerut",
-    "UP16": "Gautam Buddh Nagar / Noida",
-    "UP20": "Bijnor",
-    "UP21": "Moradabad",
-    "UP22": "Rampur",
-    "UP23": "Amroha",
-    "UP25": "Bareilly",
-    "UP27": "Shahjahanpur",
-    "UP30": "Hardoi",
-    "UP31": "Lakhimpur Kheri",
-    "UP32": "Lucknow",
-    "UP33": "Raebareli",
-    "UP34": "Sitapur",
-    "UP35": "Unnao",
-    "UP36": "Barabanki",
-    "UP37": "Fatehpur",
-    "UP40": "Bahraich",
-    "UP41": "Gonda",
-    "UP42": "Ayodhya region",
-    "UP43": "Sultanpur",
-    "UP44": "Ambedkar Nagar",
-    "UP47": "Gorakhpur",
-    "UP50": "Azamgarh",
-    "UP51": "Basti",
-    "UP52": "Deoria",
-    "UP53": "Maharajganj",
-    "UP54": "Kushinagar",
-    "UP55": "Siddharthnagar",
-    "UP56": "Sant Kabir Nagar",
-    "UP57": "Mau",
-    "UP58": "Ballia",
-    "UP60": "Jaunpur",
-    "UP61": "Varanasi",
-    "UP62": "Mirzapur",
-    "UP63": "Sonbhadra",
-    "UP64": "Ghazipur",
-    "UP65": "Chandauli",
-    "UP66": "Bhadohi",
-    "UP70": "Prayagraj",
-    "UP72": "Kaushambi",
-    "UP75": "Jhansi",
-    "UP76": "Lalitpur",
-    "UP77": "Jalaun",
-    "UP78": "Kanpur Nagar",
-    "UP79": "Kanpur Dehat",
-    "UP80": "Agra",
-    "UP81": "Aligarh",
-    "UP82": "Etah",
-    "UP83": "Firozabad",
-    "UP84": "Mainpuri",
-    "UP85": "Mathura",
-    "UP86": "Hathras",
-    "UP87": "Kasganj",
-
-    "DL01": "Delhi",
-    "DL02": "Delhi",
-    "DL03": "Delhi",
-    "DL04": "Delhi",
-    "DL05": "Delhi",
-    "DL06": "Delhi",
-    "DL07": "Delhi",
-    "DL08": "Delhi",
-    "DL09": "Delhi",
-    "DL10": "Delhi",
-    "DL11": "Delhi",
-    "DL12": "Delhi",
-    "DL13": "Delhi",
-    "DL14": "Delhi",
-    "DL15": "Delhi",
-    "DL16": "Delhi",
-    "DL17": "Delhi",
-
-    "MH01": "Mumbai",
-    "MH02": "Mumbai",
-    "MH03": "Mumbai",
-    "MH04": "Thane",
-    "MH05": "Kalyan",
-    "MH09": "Kolhapur",
-    "MH10": "Sangli",
-    "MH11": "Satara",
-    "MH12": "Pune",
-    "MH13": "Solapur",
-    "MH14": "Pimpri-Chinchwad",
-    "MH15": "Nashik",
-    "MH16": "Ahmednagar",
-    "MH19": "Jalgaon",
-    "MH20": "Chhatrapati Sambhajinagar",
-    "MH27": "Amravati",
-    "MH30": "Akola",
-    "MH31": "Nagpur",
+    "DD": "Dadra and Nagar Haveli and Daman and Diu",
 }
 
 
 # =========================================================
-# RENDER HEALTH SERVER
+# LOAD RTO DATABASE
+# =========================================================
+
+def load_rto_database():
+
+    global RTO_DB
+
+    print("[RTO] Downloading all-India RTO database...")
+
+    try:
+
+        request = urllib.request.Request(
+            RTO_API,
+            headers={
+                "User-Agent": "Vehicle-OCR-Bot/1.0"
+            }
+        )
+
+        with urllib.request.urlopen(
+            request,
+            timeout=20
+        ) as response:
+
+            data = json.loads(
+                response.read().decode(
+                    "utf-8"
+                )
+            )
+
+        count = 0
+
+        for state in data.get(
+            "states",
+            []
+        ):
+
+            state_name = state.get(
+                "state_name",
+                ""
+            )
+
+            for item in state.get(
+                "codes",
+                []
+            ):
+
+                code = (
+                    item.get(
+                        "code",
+                        ""
+                    )
+                    .upper()
+                    .replace(
+                        "-",
+                        ""
+                    )
+                    .replace(
+                        " ",
+                        ""
+                    )
+                )
+
+                office = item.get(
+                    "office",
+                    ""
+                )
+
+                if code:
+
+                    RTO_DB[code] = {
+                        "state": state_name,
+                        "city": office
+                    }
+
+                    count += 1
+
+        print(
+            f"[RTO] Loaded {count} RTO codes."
+        )
+
+        if count == 0:
+
+            print(
+                "[RTO] Database empty."
+            )
+
+    except Exception as e:
+
+        print(
+            "[RTO ERROR]",
+            repr(e)
+        )
+
+        print(
+            "[RTO] Using fallback state detection."
+        )
+
+
+# =========================================================
+# RTO LOOKUP
+# =========================================================
+
+def lookup_rto(plate):
+
+    plate = plate.upper()
+
+    # -----------------------------------------------------
+    # BH SERIES
+    # Example: 22BH1234AA
+    # -----------------------------------------------------
+
+    if re.match(
+        r"^\d{2}BH\d{4}[A-Z]{2}$",
+        plate
+    ):
+
+        return {
+            "state": "Bharat Series",
+            "city": "State/RTO city is not encoded",
+            "rto_code": "BH",
+            "confidence": "not state-specific"
+        }
+
+    # -----------------------------------------------------
+    # Standard state prefix
+    # -----------------------------------------------------
+
+    state_code = plate[:2]
+
+    state_name = STATE_CODES.get(
+        state_code,
+        "Unknown"
+    )
+
+    # -----------------------------------------------------
+    # Extract RTO code
+    # Usually state + 1-3 digits
+    # -----------------------------------------------------
+
+    match = re.match(
+        r"^([A-Z]{2})(\d{1,3})",
+        plate
+    )
+
+    if not match:
+
+        return {
+            "state": state_name,
+            "city": "RTO city could not be determined",
+            "rto_code": None,
+            "confidence": "low"
+        }
+
+    digits = match.group(2)
+
+    possible_codes = []
+
+    # Try 3 digit first
+    if len(digits) >= 3:
+
+        possible_codes.append(
+            state_code +
+            digits[:3]
+        )
+
+    # Then 2 digit
+    if len(digits) >= 2:
+
+        possible_codes.append(
+            state_code +
+            digits[:2].zfill(2)
+        )
+
+    # Then 1 digit
+    if len(digits) >= 1:
+
+        possible_codes.append(
+            state_code +
+            digits[:1].zfill(2)
+        )
+
+    for code in possible_codes:
+
+        if code in RTO_DB:
+
+            info = RTO_DB[code]
+
+            return {
+                "state": info.get(
+                    "state",
+                    state_name
+                ),
+                "city": info.get(
+                    "city",
+                    "Unknown"
+                ),
+                "rto_code": code,
+                "confidence": "database match"
+            }
+
+    # -----------------------------------------------------
+    # No database match
+    # -----------------------------------------------------
+
+    return {
+        "state": state_name,
+        "city": "RTO code not found in database",
+        "rto_code": (
+            state_code +
+            digits.zfill(2)
+        ),
+        "confidence": "state only"
+    }
+
+
+# =========================================================
+# HEALTH SERVER
 # =========================================================
 
 async def health(request):
+
     return web.Response(
         text="Vehicle OCR Bot is running."
     )
@@ -177,10 +308,19 @@ async def start_health_server():
 
     server = web.Application()
 
-    server.router.add_get("/", health)
-    server.router.add_get("/health", health)
+    server.router.add_get(
+        "/",
+        health
+    )
 
-    runner = web.AppRunner(server)
+    server.router.add_get(
+        "/health",
+        health
+    )
+
+    runner = web.AppRunner(
+        server
+    )
 
     await runner.setup()
 
@@ -193,7 +333,7 @@ async def start_health_server():
     await site.start()
 
     print(
-        f"[SERVER] HTTP server running on port {PORT}"
+        f"[SERVER] Running on port {PORT}"
     )
 
     return runner
@@ -205,34 +345,31 @@ async def start_health_server():
 
 def load_image(path):
 
-    image = cv2.imread(path)
+    image = cv2.imread(
+        path
+    )
 
     if image is None:
+
         raise ValueError(
-            "Could not load image."
+            "Image could not be loaded."
         )
 
     h, w = image.shape[:2]
 
     print(
-        f"[IMAGE] Original size: {w}x{h}"
+        f"[IMAGE] Original: {w}x{h}"
     )
 
-    # Reasonable processing size
-    max_width = 1600
+    if w > 1600:
 
-    if w > max_width:
-
-        ratio = max_width / float(w)
+        ratio = 1600 / float(w)
 
         image = cv2.resize(
             image,
             (
-                max_width,
-                max(
-                    100,
-                    int(h * ratio)
-                )
+                1600,
+                int(h * ratio)
             ),
             interpolation=cv2.INTER_AREA
         )
@@ -240,46 +377,23 @@ def load_image(path):
     h, w = image.shape[:2]
 
     print(
-        f"[IMAGE] Processing size: {w}x{h}"
+        f"[IMAGE] Processing: {w}x{h}"
     )
 
     return image
 
 
 # =========================================================
-# CLEAN OCR TEXT
+# CLEAN OCR
 # =========================================================
 
 def clean_text(text):
 
     if not text:
+
         return ""
 
     text = text.upper()
-
-    replacements = {
-        " ": "",
-        "\n": "",
-        "\r": "",
-        "\t": "",
-        "-": "",
-        "_": "",
-        ".": "",
-        ":": "",
-        "/": "",
-        "\\": "",
-        "|": "I",
-        "[": "",
-        "]": "",
-        "(": "",
-        ")": "",
-    }
-
-    for old, new in replacements.items():
-        text = text.replace(
-            old,
-            new
-        )
 
     text = re.sub(
         r"[^A-Z0-9]",
@@ -291,60 +405,7 @@ def clean_text(text):
 
 
 # =========================================================
-# COMMON OCR CORRECTIONS
-# =========================================================
-
-def correct_common_errors(text):
-
-    text = clean_text(text)
-
-    if len(text) < 2:
-        return text
-
-    # OCR commonly confuses these in the FIRST 2 letters
-    prefix_fixes = {
-        "0P": "UP",
-        "OP": "UP",
-        "0D": "OD",
-        "OD": "OD",
-        "OR": "OR",
-        "0R": "OR",
-        "1P": "UP",
-        "HP": "HP",
-        "MP": "MP",
-        "MH": "MH",
-        "RJ": "RJ",
-        "HR": "HR",
-        "PB": "PB",
-        "BR": "BR",
-        "GJ": "GJ",
-        "KA": "KA",
-        "KL": "KL",
-        "TN": "TN",
-        "TS": "TS",
-        "AP": "AP",
-        "CG": "CG",
-        "UK": "UK",
-        "WB": "WB",
-        "AS": "AS",
-        "JH": "JH",
-        "DL": "DL",
-    }
-
-    prefix = text[:2]
-
-    if prefix in prefix_fixes:
-
-        text = (
-            prefix_fixes[prefix]
-            + text[2:]
-        )
-
-    return text
-
-
-# =========================================================
-# OCR IMAGE PREPARATION
+# OCR IMAGE VARIANTS
 # =========================================================
 
 def prepare_ocr_images(image):
@@ -356,42 +417,28 @@ def prepare_ocr_images(image):
 
     h, w = gray.shape
 
-    # Resize to OCR-friendly size
     target_width = 1200
 
-    if w < 1200:
+    if w != target_width:
 
-        scale = 1200 / float(w)
-
-        new_w = 1200
-        new_h = max(
-            100,
-            int(h * scale)
-        )
-
-        gray = cv2.resize(
-            gray,
-            (new_w, new_h),
-            interpolation=cv2.INTER_CUBIC
-        )
-
-    elif w > 1200:
-
-        scale = 1200 / float(w)
+        scale = target_width / float(w)
 
         gray = cv2.resize(
             gray,
             (
-                1200,
+                target_width,
                 max(
                     100,
                     int(h * scale)
                 )
             ),
-            interpolation=cv2.INTER_AREA
+            interpolation=(
+                cv2.INTER_CUBIC
+                if w < target_width
+                else cv2.INTER_AREA
+            )
         )
 
-    # Contrast
     clahe = cv2.createCLAHE(
         clipLimit=2.0,
         tileGridSize=(8, 8)
@@ -401,7 +448,6 @@ def prepare_ocr_images(image):
         gray
     )
 
-    # OTSU
     _, binary = cv2.threshold(
         enhanced,
         0,
@@ -410,29 +456,18 @@ def prepare_ocr_images(image):
         cv2.THRESH_OTSU
     )
 
-    # Adaptive threshold
-    adaptive = cv2.adaptiveThreshold(
-        enhanced,
-        255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY,
-        31,
-        9
-    )
-
     return [
         ("gray", gray),
         ("enhanced", enhanced),
         ("binary", binary),
-        ("adaptive", adaptive),
     ]
 
 
 # =========================================================
-# DIRECT OCR
+# TESSERACT
 # =========================================================
 
-def run_tesseract(image, psm):
+def run_ocr(image, psm):
 
     config = (
         f"--oem 3 --psm {psm} "
@@ -442,170 +477,302 @@ def run_tesseract(image, psm):
 
     try:
 
-        text = pytesseract.image_to_string(
+        return pytesseract.image_to_string(
             image,
             config=config,
             lang="eng",
             timeout=4
-        )
-
-        return text or ""
-
-    except RuntimeError as e:
-
-        print(
-            f"[OCR TIMEOUT] PSM {psm}: {e}"
-        )
-
-        return ""
+        ) or ""
 
     except Exception as e:
 
         print(
-            f"[OCR ERROR] PSM {psm}: {e}"
+            f"[OCR ERROR] PSM={psm}: {repr(e)}"
         )
 
         return ""
 
 
 # =========================================================
-# EXTRACT PLATE CANDIDATES
+# OCR CONFUSION NORMALIZATION
+# =========================================================
+
+def normalize_plate(text):
+
+    text = clean_text(
+        text
+    )
+
+    if len(text) < 4:
+
+        return []
+
+    candidates = []
+
+    # Original
+    candidates.append(
+        text
+    )
+
+    # Common OCR corrections
+    variants = {
+        "Z": "2",
+        "O": "0",
+        "Q": "0",
+        "I": "1",
+        "L": "1",
+        "S": "5",
+        "G": "6",
+        "T": "7",
+        "B": "8",
+    }
+
+    corrected = text
+
+    # Don't blindly replace first two characters.
+    # Only apply these to the numeric/series area.
+    if len(text) > 2:
+
+        prefix = text[:2]
+
+        rest = text[2:]
+
+        for old, new in variants.items():
+
+            rest = rest.replace(
+                old,
+                new
+            )
+
+        corrected = (
+            prefix +
+            rest
+        )
+
+        candidates.append(
+            corrected
+        )
+
+    # Fix common state-prefix OCR mistakes
+    prefix_map = {
+        "0P": "UP",
+        "OP": "UP",
+        "VP": "UP",
+        "U0": "UP",
+        "MP": "MP",
+        "MH": "MH",
+        "HP": "HP",
+        "HR": "HR",
+        "PB": "PB",
+        "RJ": "RJ",
+        "DL": "DL",
+        "KA": "KA",
+        "KL": "KL",
+        "TN": "TN",
+        "TS": "TS",
+        "TG": "TG",
+        "GJ": "GJ",
+        "BR": "BR",
+        "WB": "WB",
+        "AS": "AS",
+        "AP": "AP",
+        "CG": "CG",
+        "UK": "UK",
+        "OD": "OD",
+        "JH": "JH",
+        "GA": "GA",
+    }
+
+    if len(text) >= 2:
+
+        prefix = text[:2]
+
+        if prefix in prefix_map:
+
+            fixed = (
+                prefix_map[prefix] +
+                text[2:]
+            )
+
+            candidates.append(
+                fixed
+            )
+
+    return list(
+        dict.fromkeys(
+            candidates
+        )
+    )
+
+
+# =========================================================
+# PLATE PATTERN
+# =========================================================
+
+def is_valid_plate(text):
+
+    text = clean_text(
+        text
+    )
+
+    # Bharat Series
+    if re.match(
+        r"^\d{2}BH\d{4}[A-Z]{2}$",
+        text
+    ):
+
+        return True
+
+    # Standard Indian registration
+    if re.match(
+        r"^[A-Z]{2}\d{1,3}[A-Z]{1,3}\d{1,4}$",
+        text
+    ):
+
+        return True
+
+    if re.match(
+        r"^[A-Z]{2}\d{1,3}\d{4,5}$",
+        text
+    ):
+
+        return True
+
+    return False
+
+
+# =========================================================
+# CANDIDATE EXTRACTION
 # =========================================================
 
 def extract_candidates(text):
 
-    original = clean_text(
-        text
-    )
+    if not text:
 
-    corrected = correct_common_errors(
-        original
+        return []
+
+    raw = text.upper()
+
+    # Individual OCR tokens
+    tokens = re.findall(
+        r"[A-Z0-9]+",
+        raw
     )
 
     candidates = []
 
-    if not corrected:
-        return candidates
+    # Each token
+    for token in tokens:
 
-    # -----------------------------------------------------
-    # Normal Indian format
-    # Example: UP32AB1234
-    # -----------------------------------------------------
-
-    patterns = [
-
-        r"[A-Z]{2}\d{1,2}[A-Z]{1,3}\d{1,4}",
-
-        r"[A-Z]{2}\d{1,2}\d{4,5}",
-
-    ]
-
-    for pattern in patterns:
-
-        matches = re.findall(
-            pattern,
-            corrected
-        )
-
-        candidates.extend(
-            matches
-        )
-
-    # -----------------------------------------------------
-    # Search inside text
-    # -----------------------------------------------------
-
-    for state in STATE_CODES.keys():
-
-        pattern = (
-            state +
-            r"\d{1,2}[A-Z0-9]{3,9}"
-        )
-
-        matches = re.findall(
-            pattern,
-            corrected
-        )
-
-        candidates.extend(
-            matches
-        )
-
-    # -----------------------------------------------------
-    # Try OCR confusion around numbers
-    # -----------------------------------------------------
-
-    flexible = corrected
-
-    # These substitutions are ONLY used
-    # for candidate generation.
-    # We don't automatically trust them.
-
-    flexible = flexible.replace(
-        "Z",
-        "2"
-    )
-
-    flexible = flexible.replace(
-        "O",
-        "0"
-    )
-
-    for state in STATE_CODES.keys():
-
-        pattern = (
-            state +
-            r"\d{1,2}[A-Z0-9]{3,9}"
-        )
-
-        matches = re.findall(
-            pattern,
-            flexible
-        )
-
-        candidates.extend(
-            matches
-        )
-
-    # -----------------------------------------------------
-    # Validate
-    # -----------------------------------------------------
-
-    valid = []
-
-    for candidate in candidates:
-
-        candidate = clean_text(
-            candidate
-        )
-
-        if not 7 <= len(candidate) <= 13:
-            continue
-
-        if candidate[:2] not in STATE_CODES:
-            continue
-
-        # Must contain a digit
-        if not re.search(
-            r"\d",
-            candidate
+        for variant in normalize_plate(
+            token
         ):
-            continue
 
-        valid.append(
-            candidate
+            if is_valid_plate(
+                variant
+            ):
+
+                candidates.append(
+                    variant
+                )
+
+    # Entire OCR output joined
+    joined = "".join(
+        tokens
+    )
+
+    for variant in normalize_plate(
+        joined
+    ):
+
+        if is_valid_plate(
+            variant
+        ):
+
+            candidates.append(
+                variant
+            )
+
+    # Search substrings
+    for state in STATE_CODES:
+
+        pattern = (
+            state +
+            r"[A-Z0-9]{5,11}"
         )
 
-    return valid
+        for match in re.findall(
+            pattern,
+            joined
+        ):
+
+            for variant in normalize_plate(
+                match
+            ):
+
+                if is_valid_plate(
+                    variant
+                ):
+
+                    candidates.append(
+                        variant
+                    )
+
+    return candidates
 
 
 # =========================================================
-# PLATE VOTING
+# OCR ANALYSIS
 # =========================================================
 
-def choose_plate(all_candidates):
+def analyse_closeup(image):
+
+    print(
+        "[OCR] Starting direct close-up OCR"
+    )
+
+    variants = prepare_ocr_images(
+        image
+    )
+
+    all_candidates = []
+
+    for name, prepared in variants:
+
+        print(
+            f"[OCR] Variant: {name}"
+        )
+
+        for psm in (7, 8):
+
+            text = run_ocr(
+                prepared,
+                psm
+            )
+
+            print(
+                f"[RAW OCR][{name}][PSM{psm}] "
+                f"{repr(text)}"
+            )
+
+            candidates = extract_candidates(
+                text
+            )
+
+            print(
+                f"[CANDIDATES][{name}][PSM{psm}] "
+                f"{candidates}"
+            )
+
+            all_candidates.extend(
+                candidates
+            )
 
     if not all_candidates:
+
+        print(
+            "[OCR] No valid plate candidate."
+        )
 
         return None
 
@@ -614,118 +781,27 @@ def choose_plate(all_candidates):
     )
 
     print(
-        "[OCR CANDIDATES]",
+        "[OCR VOTES]",
         dict(counter)
     )
 
-    # Highest vote
-    best_plate, best_count = (
-        counter.most_common(1)[0]
-    )
-
-    # Require at least 2 independent OCR hits
-    if best_count >= 2:
-
-        print(
-            f"[PLATE] Reliable candidate: "
-            f"{best_plate} "
-            f"(votes={best_count})"
-        )
-
-        return best_plate
-
-    # One OCR hit can still be useful,
-    # but only if it looks strongly like a plate.
-    if best_count == 1:
-
-        if re.match(
-            r"^[A-Z]{2}\d{1,2}",
-            best_plate
-        ):
-
-            print(
-                f"[PLATE] Single strong candidate: "
-                f"{best_plate}"
-            )
-
-            return best_plate
-
-    return None
-
-
-# =========================================================
-# DIRECT CLOSE-UP OCR
-# =========================================================
-
-def analyse_closeup(image):
+    best, votes = counter.most_common(
+        1
+    )[0]
 
     print(
-        "[MODE] Direct close-up OCR"
+        f"[OCR BEST] {best} "
+        f"votes={votes}"
     )
 
-    ocr_images = prepare_ocr_images(
-        image
-    )
-
-    all_candidates = []
-
-    for name, prepared in ocr_images:
-
-        print(
-            f"[OCR] Processing: {name}"
-        )
-
-        # PSM 7 = single line
-        text7 = run_tesseract(
-            prepared,
-            7
-        )
-
-        print(
-            f"[RAW OCR][{name}][PSM7] "
-            f"{repr(text7)}"
-        )
-
-        candidates7 = extract_candidates(
-            text7
-        )
-
-        all_candidates.extend(
-            candidates7
-        )
-
-        # If found strong candidate, still do
-        # one additional PSM 8 check.
-        text8 = run_tesseract(
-            prepared,
-            8
-        )
-
-        print(
-            f"[RAW OCR][{name}][PSM8] "
-            f"{repr(text8)}"
-        )
-
-        candidates8 = extract_candidates(
-            text8
-        )
-
-        all_candidates.extend(
-            candidates8
-        )
-
-    return choose_plate(
-        all_candidates
-    )
+    return best
 
 
 # =========================================================
-# FULL VEHICLE FALLBACK
+# REGION FALLBACK
 # =========================================================
 
 def find_plate_regions(image):
-
-    regions = []
 
     gray = cv2.cvtColor(
         image,
@@ -757,7 +833,7 @@ def find_plate_regions(image):
 
     h, w = gray.shape
 
-    possible = []
+    results = []
 
     for contour in contours:
 
@@ -772,9 +848,11 @@ def find_plate_regions(image):
 
         if 2.0 <= ratio <= 8.0:
 
-            possible.append(
+            area = cw * ch
+
+            results.append(
                 (
-                    cw * ch,
+                    area,
                     x,
                     y,
                     cw,
@@ -782,33 +860,35 @@ def find_plate_regions(image):
                 )
             )
 
-    possible.sort(
+    results.sort(
         reverse=True
     )
 
-    for _, x, y, cw, ch in possible[:3]:
+    regions = []
 
-        pad_x = int(cw * 0.20)
-        pad_y = int(ch * 1.0)
+    for _, x, y, cw, ch in results[:3]:
+
+        px = int(cw * 0.2)
+        py = int(ch * 1.0)
 
         x1 = max(
             0,
-            x - pad_x
+            x - px
         )
 
         y1 = max(
             0,
-            y - pad_y
+            y - py
         )
 
         x2 = min(
             w,
-            x + cw + pad_x
+            x + cw + px
         )
 
         y2 = min(
             h,
-            y + ch + pad_y
+            y + ch + py
         )
 
         crop = image[
@@ -826,7 +906,7 @@ def find_plate_regions(image):
 
 
 # =========================================================
-# COMPLETE ANALYSIS
+# COMPLETE VEHICLE ANALYSIS
 # =========================================================
 
 def analyse_vehicle(path):
@@ -835,9 +915,9 @@ def analyse_vehicle(path):
         path
     )
 
-    # =====================================================
-    # FIRST: Treat image as a close-up plate
-    # =====================================================
+    # -----------------------------------------------------
+    # FIRST: Whole image OCR
+    # -----------------------------------------------------
 
     plate = analyse_closeup(
         image
@@ -845,16 +925,14 @@ def analyse_vehicle(path):
 
     if plate:
 
-        return make_result(
-            plate
-        )
+        return plate
 
-    # =====================================================
-    # SECOND: Try detected plate regions
-    # =====================================================
+    # -----------------------------------------------------
+    # SECOND: Detect possible plate regions
+    # -----------------------------------------------------
 
     print(
-        "[MODE] Region fallback"
+        "[FALLBACK] Searching plate regions..."
     )
 
     regions = find_plate_regions(
@@ -862,7 +940,8 @@ def analyse_vehicle(path):
     )
 
     print(
-        f"[REGIONS] Found {len(regions)} possible regions"
+        f"[FALLBACK] Regions found: "
+        f"{len(regions)}"
     )
 
     for index, region in enumerate(
@@ -870,7 +949,7 @@ def analyse_vehicle(path):
     ):
 
         print(
-            f"[REGION] OCR {index + 1}"
+            f"[FALLBACK] OCR region {index + 1}"
         )
 
         plate = analyse_closeup(
@@ -879,60 +958,13 @@ def analyse_vehicle(path):
 
         if plate:
 
-            return make_result(
-                plate
-            )
-
-    print(
-        "[RESULT] No reliable plate detected."
-    )
+            return plate
 
     return None
 
 
 # =========================================================
-# RESULT
-# =========================================================
-
-def make_result(plate):
-
-    state_code = plate[:2]
-
-    state_name = STATE_CODES.get(
-        state_code
-    )
-
-    rto_code = None
-    rto_name = None
-
-    match = re.match(
-        r"^([A-Z]{2})(\d{1,2})",
-        plate
-    )
-
-    if match:
-
-        number = match.group(2)
-
-        rto_code = (
-            state_code +
-            number.zfill(2)
-        )
-
-        rto_name = RTO_CODES.get(
-            rto_code
-        )
-
-    return {
-        "plate": plate,
-        "state": state_name,
-        "rto_code": rto_code,
-        "rto_name": rto_name,
-    }
-
-
-# =========================================================
-# TELEGRAM /START
+# TELEGRAM START
 # =========================================================
 
 async def start(
@@ -941,18 +973,20 @@ async def start(
 ):
 
     await update.message.reply_text(
-        "🚗 INDIA VEHICLE OCR BOT\n\n"
+        "🚗 INDIA VEHICLE CITY FINDER\n\n"
         "📸 Number plate ki photo bhejo.\n\n"
-        "Main:\n"
-        "🔢 Registration number read karunga\n"
-        "🇮🇳 State/UT identify karunga\n"
-        "🏢 Available RTO reference check karunga\n\n"
-        "⚠️ Bot unknown number guess nahi karega."
+        "Bot try karega:\n"
+        "🔢 Registration number\n"
+        "🇮🇳 State/UT\n"
+        "🏙️ Registration/RTO city\n"
+        "🏢 RTO code\n\n"
+        "⚠️ City ka matlab registration/RTO area hai, "
+        "current vehicle location nahi."
     )
 
 
 # =========================================================
-# TELEGRAM /HELP
+# HELP
 # =========================================================
 
 async def help_command(
@@ -961,13 +995,16 @@ async def help_command(
 ):
 
     await update.message.reply_text(
-        "📸 Best result ke liye:\n\n"
-        "• Number plate close-up bhejo\n"
-        "• Letters/numbers sharp hone chahiye\n"
-        "• Reflection kam ho\n"
-        "• Plate seedhi ho\n"
-        "• Photo blur na ho\n\n"
-        "Full vehicle photo bhi try kar sakte ho."
+        "📸 Best result:\n\n"
+        "• Number plate ka clear close-up\n"
+        "• Good lighting\n"
+        "• Minimum blur\n"
+        "• Plate seedhi ho\n\n"
+        "Example:\n"
+        "UP32AB1234 → Lucknow, Uttar Pradesh\n"
+        "UP78AB1234 → Kanpur Nagar, Uttar Pradesh\n\n"
+        "BH-series mein city/state plate se directly "
+        "determine nahi hoti."
     )
 
 
@@ -982,20 +1019,17 @@ async def photo_handler(
 
     status = await update.message.reply_text(
         "🔎 Number plate scan ho rahi hai...\n\n"
-        "Direct OCR + plate verification chal raha hai."
+        "OCR + All-India RTO lookup."
     )
 
     temp_path = None
 
     try:
 
-        # Highest resolution Telegram version
         photo = update.message.photo[-1]
 
-        telegram_file = (
-            await context.bot.get_file(
-                photo.file_id
-            )
+        telegram_file = await context.bot.get_file(
+            photo.file_id
         )
 
         with tempfile.NamedTemporaryFile(
@@ -1010,68 +1044,69 @@ async def photo_handler(
         )
 
         print(
-            "===================================="
+            "========================================"
         )
 
         print(
-            "[PHOTO] New image received"
+            "[PHOTO] New vehicle image received"
         )
 
-        # OCR is CPU-heavy
-        result = await asyncio.to_thread(
+        plate = await asyncio.to_thread(
             analyse_vehicle,
             temp_path
         )
 
         print(
-            "===================================="
+            "========================================"
         )
 
-        if not result:
+        if not plate:
 
             await status.edit_text(
                 "❌ Number plate reliably read nahi ho payi.\n\n"
-                "Maine OCR attempts kiye hain, "
-                "lekin reliable registration number nahi mila.\n\n"
-                "📸 Agar plate close-up hai, photo dobara "
-                "original quality mein bhejo.\n\n"
-                "⚠️ Bot guessed number nahi dega."
+                "OCR ne reliable registration number detect "
+                "nahi kiya.\n\n"
+                "📸 Clear close-up/original-quality plate photo "
+                "try karo.\n\n"
+                "Render logs mein `[RAW OCR]` lines available hain."
             )
 
             return
 
-        response = (
-            "✅ NUMBER PLATE FOUND\n\n"
-            f"🔢 Registration: {result['plate']}\n"
-            f"🇮🇳 State/UT: {result['state']}\n"
+        info = lookup_rto(
+            plate
         )
 
-        if result["rto_code"]:
+        response = (
+            "✅ VEHICLE REGISTRATION FOUND\n\n"
+            f"🔢 Registration: {plate}\n"
+            f"🇮🇳 State/UT: {info['state']}\n"
+        )
+
+        if info.get(
+            "rto_code"
+        ):
 
             response += (
                 f"🏢 RTO Code: "
-                f"{result['rto_code']}\n"
+                f"{info['rto_code']}\n"
             )
 
-        if result["rto_name"]:
+        if info.get(
+            "city"
+        ):
 
             response += (
-                f"📍 Known registration area: "
-                f"{result['rto_name']}\n"
-            )
-
-        else:
-
-            response += (
-                "📍 Registration area: "
-                "Not available in reference data\n"
+                f"🏙️ Registration City/Area: "
+                f"{info['city']}\n"
             )
 
         response += (
             "\n"
-            "⚠️ Registration area current vehicle "
-            "location nahi hoti.\n"
-            "⚠️ Owner details provide nahi ki jaati."
+            "ℹ️ Yeh registration/RTO area hai.\n"
+            "📍 Isse vehicle ki current location "
+            "determine nahi hoti.\n"
+            "👤 Owner details is bot se provide nahi hoti."
         )
 
         await status.edit_text(
@@ -1088,8 +1123,8 @@ async def photo_handler(
         try:
 
             await status.edit_text(
-                "❌ Image process nahi ho saki.\n\n"
-                "Please dobara photo bhejo."
+                "❌ Photo process nahi ho saki.\n"
+                "Please dobara try karo."
             )
 
         except Exception:
@@ -1132,12 +1167,13 @@ async def main():
     if not BOT_TOKEN:
 
         raise RuntimeError(
-            "BOT_TOKEN is missing."
+            "BOT_TOKEN environment variable missing."
         )
 
-    health_runner = (
-        await start_health_server()
-    )
+    # Load RTO data before starting bot
+    load_rto_database()
+
+    health_runner = await start_health_server()
 
     application = (
         Application.builder()
@@ -1175,7 +1211,23 @@ async def main():
     )
 
     print(
-        "Starting Telegram polling..."
+        "========================================"
+    )
+
+    print(
+        "VEHICLE OCR BOT STARTING"
+    )
+
+    print(
+        "RTO DATABASE: LOADED"
+    )
+
+    print(
+        "TELEGRAM POLLING: STARTING"
+    )
+
+    print(
+        "========================================"
     )
 
     await application.initialize()
@@ -1188,23 +1240,7 @@ async def main():
     )
 
     print(
-        "===================================="
-    )
-
-    print(
         "BOT IS RUNNING"
-    )
-
-    print(
-        "TELEGRAM POLLING: ACTIVE"
-    )
-
-    print(
-        "OCR DEBUG MODE: ACTIVE"
-    )
-
-    print(
-        "===================================="
     )
 
     try:
@@ -1212,10 +1248,6 @@ async def main():
         await asyncio.Event().wait()
 
     finally:
-
-        print(
-            "Stopping bot..."
-        )
 
         await application.updater.stop()
 
@@ -1242,4 +1274,4 @@ if __name__ == "__main__":
 
         print(
             "Bot stopped."
-)
+            )
