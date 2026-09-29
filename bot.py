@@ -2,6 +2,7 @@ import os
 import re
 import asyncio
 import tempfile
+from collections import Counter
 
 import cv2
 import numpy as np
@@ -21,7 +22,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 PORT = int(os.getenv("PORT", "10000"))
 
 # =========================================================
-# STATE CODES
+# INDIAN STATE / UT CODES
 # =========================================================
 
 STATE_CODES = {
@@ -174,12 +175,12 @@ async def health(request):
 
 async def start_health_server():
 
-    app = web.Application()
+    server = web.Application()
 
-    app.router.add_get("/", health)
-    app.router.add_get("/health", health)
+    server.router.add_get("/", health)
+    server.router.add_get("/health", health)
 
-    runner = web.AppRunner(app)
+    runner = web.AppRunner(server)
 
     await runner.setup()
 
@@ -192,14 +193,14 @@ async def start_health_server():
     await site.start()
 
     print(
-        f"HTTP server running on port {PORT}"
+        f"[SERVER] HTTP server running on port {PORT}"
     )
 
     return runner
 
 
 # =========================================================
-# LOAD IMAGE
+# IMAGE LOAD
 # =========================================================
 
 def load_image(path):
@@ -208,13 +209,17 @@ def load_image(path):
 
     if image is None:
         raise ValueError(
-            "Unable to load image."
+            "Could not load image."
         )
 
     h, w = image.shape[:2]
 
-    # Do not allow extremely large processing
-    max_width = 1400
+    print(
+        f"[IMAGE] Original size: {w}x{h}"
+    )
+
+    # Reasonable processing size
+    max_width = 1600
 
     if w > max_width:
 
@@ -224,21 +229,57 @@ def load_image(path):
             image,
             (
                 max_width,
-                int(h * ratio)
+                max(
+                    100,
+                    int(h * ratio)
+                )
             ),
             interpolation=cv2.INTER_AREA
         )
+
+    h, w = image.shape[:2]
+
+    print(
+        f"[IMAGE] Processing size: {w}x{h}"
+    )
 
     return image
 
 
 # =========================================================
-# NORMALIZE OCR
+# CLEAN OCR TEXT
 # =========================================================
 
-def normalize_text(text):
+def clean_text(text):
+
+    if not text:
+        return ""
 
     text = text.upper()
+
+    replacements = {
+        " ": "",
+        "\n": "",
+        "\r": "",
+        "\t": "",
+        "-": "",
+        "_": "",
+        ".": "",
+        ":": "",
+        "/": "",
+        "\\": "",
+        "|": "I",
+        "[": "",
+        "]": "",
+        "(": "",
+        ")": "",
+    }
+
+    for old, new in replacements.items():
+        text = text.replace(
+            old,
+            new
+        )
 
     text = re.sub(
         r"[^A-Z0-9]",
@@ -250,12 +291,63 @@ def normalize_text(text):
 
 
 # =========================================================
-# OCR
+# COMMON OCR CORRECTIONS
 # =========================================================
 
-def ocr_image(image):
+def correct_common_errors(text):
 
-    results = []
+    text = clean_text(text)
+
+    if len(text) < 2:
+        return text
+
+    # OCR commonly confuses these in the FIRST 2 letters
+    prefix_fixes = {
+        "0P": "UP",
+        "OP": "UP",
+        "0D": "OD",
+        "OD": "OD",
+        "OR": "OR",
+        "0R": "OR",
+        "1P": "UP",
+        "HP": "HP",
+        "MP": "MP",
+        "MH": "MH",
+        "RJ": "RJ",
+        "HR": "HR",
+        "PB": "PB",
+        "BR": "BR",
+        "GJ": "GJ",
+        "KA": "KA",
+        "KL": "KL",
+        "TN": "TN",
+        "TS": "TS",
+        "AP": "AP",
+        "CG": "CG",
+        "UK": "UK",
+        "WB": "WB",
+        "AS": "AS",
+        "JH": "JH",
+        "DL": "DL",
+    }
+
+    prefix = text[:2]
+
+    if prefix in prefix_fixes:
+
+        text = (
+            prefix_fixes[prefix]
+            + text[2:]
+        )
+
+    return text
+
+
+# =========================================================
+# OCR IMAGE PREPARATION
+# =========================================================
+
+def prepare_ocr_images(image):
 
     gray = cv2.cvtColor(
         image,
@@ -264,28 +356,40 @@ def ocr_image(image):
 
     h, w = gray.shape
 
-    # Keep OCR image reasonably sized
-    if w > 1000:
+    # Resize to OCR-friendly size
+    target_width = 1200
 
-        ratio = 1000 / float(w)
+    if w < 1200:
+
+        scale = 1200 / float(w)
+
+        new_w = 1200
+        new_h = max(
+            100,
+            int(h * scale)
+        )
+
+        gray = cv2.resize(
+            gray,
+            (new_w, new_h),
+            interpolation=cv2.INTER_CUBIC
+        )
+
+    elif w > 1200:
+
+        scale = 1200 / float(w)
 
         gray = cv2.resize(
             gray,
             (
-                1000,
-                max(100, int(h * ratio))
+                1200,
+                max(
+                    100,
+                    int(h * scale)
+                )
             ),
             interpolation=cv2.INTER_AREA
         )
-
-    # Upscale only once
-    enlarged = cv2.resize(
-        gray,
-        None,
-        fx=2,
-        fy=2,
-        interpolation=cv2.INTER_CUBIC
-    )
 
     # Contrast
     clahe = cv2.createCLAHE(
@@ -294,10 +398,10 @@ def ocr_image(image):
     )
 
     enhanced = clahe.apply(
-        enlarged
+        gray
     )
 
-    # Threshold
+    # OTSU
     _, binary = cv2.threshold(
         enhanced,
         0,
@@ -306,142 +410,322 @@ def ocr_image(image):
         cv2.THRESH_OTSU
     )
 
-    images = [
+    # Adaptive threshold
+    adaptive = cv2.adaptiveThreshold(
         enhanced,
-        binary
+        255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY,
+        31,
+        9
+    )
+
+    return [
+        ("gray", gray),
+        ("enhanced", enhanced),
+        ("binary", binary),
+        ("adaptive", adaptive),
     ]
 
-    # Only 2 PSM modes
-    for img in images:
 
-        for psm in (7, 8):
+# =========================================================
+# DIRECT OCR
+# =========================================================
 
-            try:
+def run_tesseract(image, psm):
 
-                text = pytesseract.image_to_string(
-                    img,
-                    config=(
-                        f"--oem 3 --psm {psm} "
-                        "-c tessedit_char_whitelist="
-                        "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-                    ),
-                    lang="eng",
-                    timeout=3
-                )
+    config = (
+        f"--oem 3 --psm {psm} "
+        "-c tessedit_char_whitelist="
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    )
 
-                text = normalize_text(
-                    text
-                )
+    try:
 
-                if text:
+        text = pytesseract.image_to_string(
+            image,
+            config=config,
+            lang="eng",
+            timeout=4
+        )
 
-                    print(
-                        "OCR:",
-                        text
-                    )
+        return text or ""
 
-                    results.append(
-                        text
-                    )
+    except RuntimeError as e:
 
-            except RuntimeError as e:
+        print(
+            f"[OCR TIMEOUT] PSM {psm}: {e}"
+        )
 
-                print(
-                    "OCR timeout/error:",
-                    str(e)
-                )
+        return ""
 
-            except Exception as e:
+    except Exception as e:
 
-                print(
-                    "OCR error:",
-                    str(e)
-                )
+        print(
+            f"[OCR ERROR] PSM {psm}: {e}"
+        )
 
-    return results
+        return ""
 
 
 # =========================================================
-# PLATE CANDIDATE SEARCH
+# EXTRACT PLATE CANDIDATES
 # =========================================================
 
-def find_plate(texts):
+def extract_candidates(text):
+
+    original = clean_text(
+        text
+    )
+
+    corrected = correct_common_errors(
+        original
+    )
 
     candidates = []
 
-    for text in texts:
+    if not corrected:
+        return candidates
 
-        # Normal Indian registration
-        patterns = [
+    # -----------------------------------------------------
+    # Normal Indian format
+    # Example: UP32AB1234
+    # -----------------------------------------------------
 
-            r"[A-Z]{2}\d{1,2}[A-Z]{1,3}\d{1,4}",
+    patterns = [
 
-            r"[A-Z]{2}\d{1,2}\d{4,5}",
+        r"[A-Z]{2}\d{1,2}[A-Z]{1,3}\d{1,4}",
 
-        ]
+        r"[A-Z]{2}\d{1,2}\d{4,5}",
 
-        for pattern in patterns:
+    ]
 
-            matches = re.findall(
-                pattern,
-                text
-            )
+    for pattern in patterns:
 
-            candidates.extend(
-                matches
-            )
+        matches = re.findall(
+            pattern,
+            corrected
+        )
 
-    # Only valid state prefixes
+        candidates.extend(
+            matches
+        )
+
+    # -----------------------------------------------------
+    # Search inside text
+    # -----------------------------------------------------
+
+    for state in STATE_CODES.keys():
+
+        pattern = (
+            state +
+            r"\d{1,2}[A-Z0-9]{3,9}"
+        )
+
+        matches = re.findall(
+            pattern,
+            corrected
+        )
+
+        candidates.extend(
+            matches
+        )
+
+    # -----------------------------------------------------
+    # Try OCR confusion around numbers
+    # -----------------------------------------------------
+
+    flexible = corrected
+
+    # These substitutions are ONLY used
+    # for candidate generation.
+    # We don't automatically trust them.
+
+    flexible = flexible.replace(
+        "Z",
+        "2"
+    )
+
+    flexible = flexible.replace(
+        "O",
+        "0"
+    )
+
+    for state in STATE_CODES.keys():
+
+        pattern = (
+            state +
+            r"\d{1,2}[A-Z0-9]{3,9}"
+        )
+
+        matches = re.findall(
+            pattern,
+            flexible
+        )
+
+        candidates.extend(
+            matches
+        )
+
+    # -----------------------------------------------------
+    # Validate
+    # -----------------------------------------------------
+
     valid = []
 
     for candidate in candidates:
 
-        candidate = normalize_text(
+        candidate = clean_text(
             candidate
         )
 
-        if len(candidate) < 7:
-            continue
-
-        if len(candidate) > 13:
+        if not 7 <= len(candidate) <= 13:
             continue
 
         if candidate[:2] not in STATE_CODES:
+            continue
+
+        # Must contain a digit
+        if not re.search(
+            r"\d",
+            candidate
+        ):
             continue
 
         valid.append(
             candidate
         )
 
-    if not valid:
+    return valid
+
+
+# =========================================================
+# PLATE VOTING
+# =========================================================
+
+def choose_plate(all_candidates):
+
+    if not all_candidates:
+
         return None
 
-    # Vote
-    counter = {}
-
-    for candidate in valid:
-
-        counter[candidate] = (
-            counter.get(candidate, 0) + 1
-        )
-
-    best = max(
-        counter,
-        key=counter.get
+    counter = Counter(
+        all_candidates
     )
 
-    return best
+    print(
+        "[OCR CANDIDATES]",
+        dict(counter)
+    )
+
+    # Highest vote
+    best_plate, best_count = (
+        counter.most_common(1)[0]
+    )
+
+    # Require at least 2 independent OCR hits
+    if best_count >= 2:
+
+        print(
+            f"[PLATE] Reliable candidate: "
+            f"{best_plate} "
+            f"(votes={best_count})"
+        )
+
+        return best_plate
+
+    # One OCR hit can still be useful,
+    # but only if it looks strongly like a plate.
+    if best_count == 1:
+
+        if re.match(
+            r"^[A-Z]{2}\d{1,2}",
+            best_plate
+        ):
+
+            print(
+                f"[PLATE] Single strong candidate: "
+                f"{best_plate}"
+            )
+
+            return best_plate
+
+    return None
 
 
 # =========================================================
-# PLATE REGION DETECTION
+# DIRECT CLOSE-UP OCR
 # =========================================================
 
-def find_regions(image):
+def analyse_closeup(image):
+
+    print(
+        "[MODE] Direct close-up OCR"
+    )
+
+    ocr_images = prepare_ocr_images(
+        image
+    )
+
+    all_candidates = []
+
+    for name, prepared in ocr_images:
+
+        print(
+            f"[OCR] Processing: {name}"
+        )
+
+        # PSM 7 = single line
+        text7 = run_tesseract(
+            prepared,
+            7
+        )
+
+        print(
+            f"[RAW OCR][{name}][PSM7] "
+            f"{repr(text7)}"
+        )
+
+        candidates7 = extract_candidates(
+            text7
+        )
+
+        all_candidates.extend(
+            candidates7
+        )
+
+        # If found strong candidate, still do
+        # one additional PSM 8 check.
+        text8 = run_tesseract(
+            prepared,
+            8
+        )
+
+        print(
+            f"[RAW OCR][{name}][PSM8] "
+            f"{repr(text8)}"
+        )
+
+        candidates8 = extract_candidates(
+            text8
+        )
+
+        all_candidates.extend(
+            candidates8
+        )
+
+    return choose_plate(
+        all_candidates
+    )
+
+
+# =========================================================
+# FULL VEHICLE FALLBACK
+# =========================================================
+
+def find_plate_regions(image):
 
     regions = []
-
-    h, w = image.shape[:2]
 
     gray = cv2.cvtColor(
         image,
@@ -456,7 +740,7 @@ def find_regions(image):
 
     kernel = cv2.getStructuringElement(
         cv2.MORPH_RECT,
-        (13, 5)
+        (15, 5)
     )
 
     closed = cv2.morphologyEx(
@@ -471,7 +755,9 @@ def find_regions(image):
         cv2.CHAIN_APPROX_SIMPLE
     )
 
-    candidates = []
+    h, w = gray.shape
+
+    possible = []
 
     for contour in contours:
 
@@ -486,11 +772,9 @@ def find_regions(image):
 
         if 2.0 <= ratio <= 8.0:
 
-            area = cw * ch
-
-            candidates.append(
+            possible.append(
                 (
-                    area,
+                    cw * ch,
                     x,
                     y,
                     cw,
@@ -498,35 +782,33 @@ def find_regions(image):
                 )
             )
 
-    # Largest candidates first
-    candidates.sort(
+    possible.sort(
         reverse=True
     )
 
-    # Only top 3 candidate regions
-    for _, x, y, cw, ch in candidates[:3]:
+    for _, x, y, cw, ch in possible[:3]:
 
-        px = int(cw * 0.20)
-        py = int(ch * 1.0)
+        pad_x = int(cw * 0.20)
+        pad_y = int(ch * 1.0)
 
         x1 = max(
             0,
-            x - px
+            x - pad_x
         )
 
         y1 = max(
             0,
-            y - py
+            y - pad_y
         )
 
         x2 = min(
             w,
-            x + cw + px
+            x + cw + pad_x
         )
 
         y2 = min(
             h,
-            y + ch + py
+            y + ch + pad_y
         )
 
         crop = image[
@@ -544,7 +826,7 @@ def find_regions(image):
 
 
 # =========================================================
-# FULL ANALYSIS
+# COMPLETE ANALYSIS
 # =========================================================
 
 def analyse_vehicle(path):
@@ -553,22 +835,34 @@ def analyse_vehicle(path):
         path
     )
 
-    print(
-        "Image:",
-        image.shape
+    # =====================================================
+    # FIRST: Treat image as a close-up plate
+    # =====================================================
+
+    plate = analyse_closeup(
+        image
     )
 
-    # -----------------------------------------------------
-    # STEP 1: Possible plate regions
-    # -----------------------------------------------------
+    if plate:
 
-    regions = find_regions(
+        return make_result(
+            plate
+        )
+
+    # =====================================================
+    # SECOND: Try detected plate regions
+    # =====================================================
+
+    print(
+        "[MODE] Region fallback"
+    )
+
+    regions = find_plate_regions(
         image
     )
 
     print(
-        "Possible plate regions:",
-        len(regions)
+        f"[REGIONS] Found {len(regions)} possible regions"
     )
 
     for index, region in enumerate(
@@ -576,54 +870,22 @@ def analyse_vehicle(path):
     ):
 
         print(
-            f"Scanning region {index + 1}"
+            f"[REGION] OCR {index + 1}"
         )
 
-        texts = ocr_image(
+        plate = analyse_closeup(
             region
         )
 
-        plate = find_plate(
-            texts
-        )
-
         if plate:
-
-            print(
-                "PLATE FOUND:",
-                plate
-            )
 
             return make_result(
                 plate
             )
 
-    # -----------------------------------------------------
-    # STEP 2: Full image
-    # -----------------------------------------------------
-
     print(
-        "Scanning complete image..."
+        "[RESULT] No reliable plate detected."
     )
-
-    texts = ocr_image(
-        image
-    )
-
-    plate = find_plate(
-        texts
-    )
-
-    if plate:
-
-        print(
-            "PLATE FOUND:",
-            plate
-        )
-
-        return make_result(
-            plate
-        )
 
     return None
 
@@ -650,9 +912,11 @@ def make_result(plate):
 
     if match:
 
+        number = match.group(2)
+
         rto_code = (
             state_code +
-            match.group(2).zfill(2)
+            number.zfill(2)
         )
 
         rto_name = RTO_CODES.get(
@@ -668,7 +932,7 @@ def make_result(plate):
 
 
 # =========================================================
-# START
+# TELEGRAM /START
 # =========================================================
 
 async def start(
@@ -678,17 +942,17 @@ async def start(
 
     await update.message.reply_text(
         "🚗 INDIA VEHICLE OCR BOT\n\n"
-        "📸 Number plate ki clear photo bhejo.\n\n"
+        "📸 Number plate ki photo bhejo.\n\n"
         "Main:\n"
         "🔢 Registration number read karunga\n"
         "🇮🇳 State/UT identify karunga\n"
         "🏢 Available RTO reference check karunga\n\n"
-        "⚠️ Unknown information guess nahi ki jayegi."
+        "⚠️ Bot unknown number guess nahi karega."
     )
 
 
 # =========================================================
-# HELP
+# TELEGRAM /HELP
 # =========================================================
 
 async def help_command(
@@ -697,12 +961,12 @@ async def help_command(
 ):
 
     await update.message.reply_text(
-        "📸 BEST PHOTO:\n\n"
-        "• Number plate close-up\n"
-        "• Text sharp ho\n"
-        "• Blur kam ho\n"
+        "📸 Best result ke liye:\n\n"
+        "• Number plate close-up bhejo\n"
+        "• Letters/numbers sharp hone chahiye\n"
         "• Reflection kam ho\n"
-        "• Plate frame mein large ho\n\n"
+        "• Plate seedhi ho\n"
+        "• Photo blur na ho\n\n"
         "Full vehicle photo bhi try kar sakte ho."
     )
 
@@ -718,18 +982,20 @@ async def photo_handler(
 
     status = await update.message.reply_text(
         "🔎 Number plate scan ho rahi hai...\n\n"
-        "Please wait."
+        "Direct OCR + plate verification chal raha hai."
     )
 
     temp_path = None
 
     try:
 
-        # Highest resolution Telegram photo
+        # Highest resolution Telegram version
         photo = update.message.photo[-1]
 
-        file = await context.bot.get_file(
-            photo.file_id
+        telegram_file = (
+            await context.bot.get_file(
+                photo.file_id
+            )
         )
 
         with tempfile.NamedTemporaryFile(
@@ -739,34 +1005,42 @@ async def photo_handler(
 
             temp_path = temp.name
 
-        await file.download_to_drive(
+        await telegram_file.download_to_drive(
             temp_path
         )
 
         print(
-            "Photo downloaded."
+            "===================================="
         )
 
-        # Run CPU-heavy OCR separately
+        print(
+            "[PHOTO] New image received"
+        )
+
+        # OCR is CPU-heavy
         result = await asyncio.to_thread(
             analyse_vehicle,
             temp_path
         )
 
+        print(
+            "===================================="
+        )
+
         if not result:
 
             await status.edit_text(
-                "❌ Number plate scan nahi ho paya.\n\n"
-                "📸 Number plate ka close-up bhejo.\n\n"
-                "Example:\n"
-                "Plate photo mein kam se kam "
-                "aadhe frame ke aas-paas honi chahiye "
-                "aur letters clearly visible hone chahiye."
+                "❌ Number plate reliably read nahi ho payi.\n\n"
+                "Maine OCR attempts kiye hain, "
+                "lekin reliable registration number nahi mila.\n\n"
+                "📸 Agar plate close-up hai, photo dobara "
+                "original quality mein bhejo.\n\n"
+                "⚠️ Bot guessed number nahi dega."
             )
 
             return
 
-        message = (
+        response = (
             "✅ NUMBER PLATE FOUND\n\n"
             f"🔢 Registration: {result['plate']}\n"
             f"🇮🇳 State/UT: {result['state']}\n"
@@ -774,47 +1048,48 @@ async def photo_handler(
 
         if result["rto_code"]:
 
-            message += (
+            response += (
                 f"🏢 RTO Code: "
                 f"{result['rto_code']}\n"
             )
 
         if result["rto_name"]:
 
-            message += (
+            response += (
                 f"📍 Known registration area: "
                 f"{result['rto_name']}\n"
             )
 
         else:
 
-            message += (
+            response += (
                 "📍 Registration area: "
                 "Not available in reference data\n"
             )
 
-        message += (
-            "\n⚠️ Registration area current "
-            "vehicle location nahi hoti.\n"
+        response += (
+            "\n"
+            "⚠️ Registration area current vehicle "
+            "location nahi hoti.\n"
             "⚠️ Owner details provide nahi ki jaati."
         )
 
         await status.edit_text(
-            message
+            response
         )
 
     except Exception as e:
 
         print(
-            "PHOTO HANDLER ERROR:",
+            "[PHOTO ERROR]",
             repr(e)
         )
 
         try:
 
             await status.edit_text(
-                "❌ Photo process nahi ho saki.\n\n"
-                "Please dobara clear photo bhejo."
+                "❌ Image process nahi ho saki.\n\n"
+                "Please dobara photo bhejo."
             )
 
         except Exception:
@@ -825,15 +1100,17 @@ async def photo_handler(
         if temp_path:
 
             try:
+
                 os.remove(
                     temp_path
                 )
+
             except Exception:
                 pass
 
 
 # =========================================================
-# TEXT
+# TEXT HANDLER
 # =========================================================
 
 async def text_handler(
@@ -855,7 +1132,7 @@ async def main():
     if not BOT_TOKEN:
 
         raise RuntimeError(
-            "BOT_TOKEN is missing in Render Environment."
+            "BOT_TOKEN is missing."
         )
 
     health_runner = (
@@ -898,7 +1175,7 @@ async def main():
     )
 
     print(
-        "Starting Telegram bot polling..."
+        "Starting Telegram polling..."
     )
 
     await application.initialize()
@@ -913,15 +1190,19 @@ async def main():
     print(
         "===================================="
     )
+
     print(
         "BOT IS RUNNING"
     )
+
     print(
         "TELEGRAM POLLING: ACTIVE"
     )
+
     print(
-        "LIGHTWEIGHT OCR: ACTIVE"
+        "OCR DEBUG MODE: ACTIVE"
     )
+
     print(
         "===================================="
     )
@@ -931,6 +1212,10 @@ async def main():
         await asyncio.Event().wait()
 
     finally:
+
+        print(
+            "Stopping bot..."
+        )
 
         await application.updater.stop()
 
