@@ -47,17 +47,22 @@ RTO_DISTRICTS = {
 }
 
 def get_rto_info(plate_text):
-    # Sabhi special characters aur spaces hatayein
-    clean_text = re.sub(r'[^A-Z0-9]', '', plate_text.upper())
+    # 1. Sabse pehle uppercase karein aur "IND" ko kahin bhi ho toh hata dein
+    upper_text = plate_text.upper().replace("IND", "")
     
-    # Agar plate mein "IND" aa raha hai, toh use hata dein
-    clean_text = clean_text.replace("IND", "")
+    # 2. Sirf letters aur numbers rakhein, baaki spaces/symbols uda dein
+    clean_text = re.sub(r'[^A-Z0-9]', '', upper_text)
     
-    match = re.search(r'([A-Z]{2}\d{2}[A-Z]{0,3}\d{4})', clean_text)
+    # 3. Indian vehicle number pattern match karein (jaise UP78HM7865)
+    match = re.search(r'([A-Z]{2}\d{2}[A-Z]{1,2}\d{4})', clean_text)
+    if not match:
+        # Agar strict match na ho toh thoda flexible pattern try karein
+        match = re.search(r'([A-Z]{2}\d{2}[A-Z0-9]{4,6})', clean_text)
+        
     if match:
         full_plate = match.group(1)
-        prefix = full_plate[:4]
-        state_code = full_plate[:2]
+        prefix = full_plate[:4] # jaise UP78
+        state_code = full_plate[:2] # jaise UP
         
         state = RTO_DB.get(state_code, "India")
         city_location = RTO_DISTRICTS.get(prefix, f"District Office ({prefix}), {state}")
@@ -147,7 +152,7 @@ async def main():
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     
-    print("[BOT] RUNNING WITH IND FILTER & ENHANCED DETAILS...")
+    print("[BOT] RUNNING WITH CLEAN IND-FILTER...")
     
     await application.initialize()
     await application.bot.delete_webhook(drop_pending_updates=True)
