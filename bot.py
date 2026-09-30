@@ -2,6 +2,7 @@ import asyncio
 import os
 import re
 import requests
+import cv2
 from aiohttp import web
 from telegram import Update
 from telegram.ext import Application, ContextTypes, MessageHandler, CommandHandler, filters
@@ -56,17 +57,27 @@ def get_rto_info(plate_text):
             
     return clean_text, "India (General Location)"
 
-# 3. Cloud OCR API Function (Lightweight & Free)
+# 3. Enhanced Cloud OCR with OpenCV Preprocessing
 def extract_plate_cloud(image_path):
+    # OpenCV se image ko preprocess karein taaki do-line plate saaf ho jaye
+    img = cv2.imread(image_path)
+    if img is not None:
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        # Resize to make text larger for API
+        resized = cv2.resize(gray, (0, 0), fx=2, fy=2)
+        # Thresholding for high contrast
+        _, thresh = cv2.threshold(resized, 120, 255, cv2.THRESH_BINARY)
+        cv2.imwrite(image_path, thresh)
+
     url = "https://api.ocr.space/parse/image"
     
     with open(image_path, 'rb') as f:
         payload = {
             'isOverlayRequired': False,
-            'apikey': 'helloworld', # Free public OCR.space API key
+            'apikey': 'helloworld',
             'language': 'eng',
             'scale': True,
-            'OCREngine': 2 # Engine 2 handles vehicle plates much better
+            'OCREngine': 2 
         }
         files = {'filename': f}
         try:
@@ -87,11 +98,11 @@ def extract_plate_cloud(image_path):
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Namaste! Main India Vehicle OCR & RTO Bot hoon.\n\n"
-        "🚗 Mujhe gaadi ki photo bhejein, main turant number plate aur RTO city ki details bataunga!"
+        "🚗 Mujhe gaadi ki photo bhejein, main number plate aur RTO city ki details bataunga!"
     )
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text("🔍 Cloud OCR ke zariye photo scan ki ja rahi hai...")
+    msg = await update.message.reply_text("🔍 Enhanced OCR ke zariye photo scan ki ja rahi hai...")
     
     photo = update.message.photo[-1]
     file = await context.bot.get_file(photo.file_id)
@@ -107,7 +118,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📍 RTO Location: **{location}**"
         )
     else:
-        await msg.edit_text("❌ Number plate read nahi ho payi. Kripya thodi aur saaf photo bhejein.")
+        await msg.edit_text("❌ Number plate read nahi ho payi. Kripya thodi aur seedhi aur saaf photo bhejein.")
         
     if os.path.exists(file_path):
         os.remove(file_path)
@@ -126,7 +137,7 @@ async def main():
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     
-    print("[BOT] RUNNING WITH CLOUD OCR (Free Tier Friendly)...")
+    print("[BOT] RUNNING WITH ENHANCED CLOUD OCR...")
     
     await application.initialize()
     await application.bot.delete_webhook(drop_pending_updates=True)
