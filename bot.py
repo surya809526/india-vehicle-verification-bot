@@ -4,7 +4,7 @@ import cv2
 import pytesseract
 from aiohttp import web
 from telegram import Update
-from telegram.ext import Application, ContextTypes, MessageHandler, filters
+from telegram.ext import Application, ContextTypes, MessageHandler, CommandHandler, filters
 
 # 1. Render Health Check Server (Port bind karne ke liye)
 async def health(request):
@@ -28,7 +28,6 @@ def extract_plate(image_path):
     if img is None:
         return ""
     
-    # Timeout bachane ke liye image resize karein
     height, width = img.shape[:2]
     if width > 800:
         img = cv2.resize(img, (800, int(height * (800 / width))))
@@ -42,7 +41,14 @@ def extract_plate(image_path):
     except:
         return ""
 
-# 3. Telegram Photo Handler (Jab user photo bheje)
+# 3. Start Command Handler (Jab user /start bheje)
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "👋 Namaste! Main India Vehicle OCR Bot hoon.\n\n"
+        "🚗 Kripya mujhe kisi bhi gaadi ki number plate ki saaf photo bhejein, main turant number plate detect karke uski details bataunga!"
+    )
+
+# 4. Telegram Photo Handler (Jab user photo bheje)
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔍 Photo mil gayi hai, number plate detect ki ja rahi hai...")
     
@@ -63,12 +69,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if os.path.exists(file_path):
         os.remove(file_path)
 
-# 4. Main Function (Server aur Bot dono ko ek sath chalane ke liye)
+# 5. Main Function
 async def main():
-    # Pehle web server start ho jo Render ka port pakad lega
     await start_web_server()
     
-    # Render ke Environment Variable se Token uthayega
     TOKEN = os.environ.get("BOT_TOKEN")
     if not TOKEN:
         print("[ERROR] BOT_TOKEN environment variable is missing!")
@@ -76,7 +80,8 @@ async def main():
         
     application = Application.builder().token(TOKEN).build()
     
-    # Photo handler register karein
+    # Handlers Register Karein (/start aur Photo dono ke liye)
+    application.add_handler(CommandHandler("start", start_command))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     
     print("==========================================")
@@ -86,13 +91,11 @@ async def main():
     print("[BOT] RUNNING & LISTENING...")
     print("==========================================")
     
-    # Conflict fix: Purana webhook saaf karke polling start karega
     await application.initialize()
     await application.bot.delete_webhook(drop_pending_updates=True)
     await application.start()
     await application.updater.start_polling()
     
-    # App ko band hone se rokne ke liye
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
