@@ -86,10 +86,10 @@ async def main():
     print("[BOT] RUNNING & LISTENING...")
     print("==========================================")
     
-    # Bot polling start karein
+    # Bot polling start karein (Conflict fix ke liye drop_pending_updates=True joda gaya hai)
     await application.initialize()
     await application.start()
-    await application.updater.start_polling()
+    await application.updater.start_polling(drop_pending_updates=True)
     
     # App ko band hone se rokne ke liye
     await asyncio.Event().wait()
