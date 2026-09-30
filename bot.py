@@ -47,7 +47,12 @@ RTO_DISTRICTS = {
 }
 
 def get_rto_info(plate_text):
+    # Sabhi special characters aur spaces hatayein
     clean_text = re.sub(r'[^A-Z0-9]', '', plate_text.upper())
+    
+    # Agar plate mein "IND" aa raha hai, toh use hata dein
+    clean_text = clean_text.replace("IND", "")
+    
     match = re.search(r'([A-Z]{2}\d{2}[A-Z]{0,3}\d{4})', clean_text)
     if match:
         full_plate = match.group(1)
@@ -142,14 +147,13 @@ async def main():
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     
-    print("[BOT] RUNNING WITH ENHANCED DETAILS...")
+    print("[BOT] RUNNING WITH IND FILTER & ENHANCED DETAILS...")
     
     await application.initialize()
     await application.bot.delete_webhook(drop_pending_updates=True)
     await application.start()
     await application.updater.start_polling()
     
-    # Yeh line ab bilkul theek hai (await ke sath)
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
