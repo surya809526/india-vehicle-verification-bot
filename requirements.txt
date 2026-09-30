@@ -1,7 +1,4 @@
 aiohttp
 opencv-python-headless
-easyocr
-torch
-torchvision
 python-telegram-bot>=21.0
-numpy
+requests
