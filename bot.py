@@ -23,11 +23,14 @@ async def start_web_server():
     await site.start()
     print(f"[SERVER] Running on {port}")
 
-# 2. RTO Database Mapping
+# 2. Comprehensive RTO Database Mapping
 RTO_DB = {
     "UP": "Uttar Pradesh", "DL": "Delhi", "MH": "Maharashtra", "KA": "Karnataka",
     "TN": "Tamil Nadu", "GJ": "Gujarat", "RJ": "Rajasthan", "MP": "Madhya Pradesh",
-    "BR": "Bihar", "WB": "West Bengal", "HR": "Haryana", "PB": "Punjab"
+    "BR": "Bihar", "WB": "West Bengal", "HR": "Haryana", "PB": "Punjab",
+    "JK": "Jammu and Kashmir", "HP": "Himachal Pradesh", "UK": "Uttarakhand",
+    "CG": "Chhattisgarh", "JH": "Jharkhand", "OD": "Odisha", "AP": "Andhra Pradesh",
+    "TS": "Telangana", "KL": "Kerala", "AS": "Assam", "GA": "Goa"
 }
 
 RTO_DISTRICTS = {
@@ -35,8 +38,11 @@ RTO_DISTRICTS = {
     "UP32": "Lucknow, Uttar Pradesh",
     "UP16": "Gautam Buddh Nagar (Noida), Uttar Pradesh",
     "UP14": "Ghaziabad, Uttar Pradesh",
+    "UP01": "Dehradun, Uttarakhand", # Just an example
     "DL01": "Delhi (Civil Lines)",
+    "DL02": "Delhi (Civil Lines)",
     "MH01": "Mumbai Central, Maharashtra",
+    "MH02": "Mumbai West, Maharashtra",
     "KA01": "Bangalore Central, Karnataka",
     "GJ01": "Ahmedabad, Gujarat"
 }
@@ -48,24 +54,19 @@ def get_rto_info(plate_text):
         full_plate = match.group(1)
         prefix = full_plate[:4]
         state_code = full_plate[:2]
-        city = RTO_DISTRICTS.get(prefix, RTO_DB.get(state_code, "India"))
-        return full_plate, city
         
-    for code, location in RTO_DISTRICTS.items():
-        if code in clean_text:
-            return clean_text, location
-            
-    return clean_text, "India (General Location)"
+        state = RTO_DB.get(state_code, "India")
+        city_location = RTO_DISTRICTS.get(prefix, f"District Office ({prefix}), {state}")
+        return full_plate, state, city_location
+        
+    return clean_text, "India", "General Region"
 
 # 3. Enhanced Cloud OCR with OpenCV Preprocessing
 def extract_plate_cloud(image_path):
-    # OpenCV se image ko preprocess karein taaki do-line plate saaf ho jaye
     img = cv2.imread(image_path)
     if img is not None:
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        # Resize to make text larger for API
         resized = cv2.resize(gray, (0, 0), fx=2, fy=2)
-        # Thresholding for high contrast
         _, thresh = cv2.threshold(resized, 120, 255, cv2.THRESH_BINARY)
         cv2.imwrite(image_path, thresh)
 
@@ -86,39 +87,44 @@ def extract_plate_cloud(image_path):
             
             if result.get('ParsedResults'):
                 parsed_text = result['ParsedResults'][0].get('ParsedText', '')
-                plate, location = get_rto_info(parsed_text)
+                plate, state, location = get_rto_info(parsed_text)
                 if len(plate) >= 6:
-                    return plate, location
+                    return plate, state, location
         except Exception as e:
             print(f"[OCR ERROR] {e}")
             
-    return "", ""
+    return "", "", ""
 
 # 4. Telegram Handlers
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Namaste! Main India Vehicle OCR & RTO Bot hoon.\n\n"
-        "🚗 Mujhe gaadi ki photo bhejein, main number plate aur RTO city ki details bataunga!"
+        "🚗 Mujhe gaadi ki number plate ki photo bhejein, main turant:\n"
+        "• Number Plate Text\n"
+        "• State & City / RTO Office\n"
+        "ki jankari dunga!"
     )
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text("🔍 Enhanced OCR ke zariye photo scan ki ja rahi hai...")
+    msg = await update.message.reply_text("🔍 Photo analyze ki ja rahi hai...")
     
     photo = update.message.photo[-1]
     file = await context.bot.get_file(photo.file_id)
     file_path = "temp_plate.jpg"
     await file.download_to_drive(file_path)
     
-    plate_text, location = extract_plate_cloud(file_path)
+    plate_text, state, location = extract_plate_cloud(file_path)
     
     if plate_text:
         await msg.edit_text(
-            f"✅ **Number Plate Detected!**\n\n"
-            f"🚗 Plate: `{plate_text}`\n"
-            f"📍 RTO Location: **{location}**"
+            f"🚗 **VEHICLE REGISTRATION DETAILS** 🚗\n\n"
+            f"📌 **Plate Number:** `{plate_text}`\n"
+            f"🏛️ **State:** {state}\n"
+            f"📍 **RTO Location:** {location}\n\n"
+            f"✅ *Verification Successful*"
         )
     else:
-        await msg.edit_text("❌ Number plate read nahi ho payi. Kripya thodi aur seedhi aur saaf photo bhejein.")
+        await msg.edit_text("❌ Number plate read nahi ho payi. Kripya saaf photo bhejein.")
         
     if os.path.exists(file_path):
         os.remove(file_path)
@@ -137,14 +143,14 @@ async def main():
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     
-    print("[BOT] RUNNING WITH ENHANCED CLOUD OCR...")
+    print("[BOT] RUNNING WITH ENHANCED DETAILS...")
     
     await application.initialize()
     await application.bot.delete_webhook(drop_pending_updates=True)
     await application.start()
     await application.updater.start_polling()
     
-    await asyncio.Event().wait()
+    asyncio.Event().wait()
 
 if __name__ == "__main__":
     asyncio.run(main())
