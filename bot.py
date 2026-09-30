@@ -86,10 +86,11 @@ async def main():
     print("[BOT] RUNNING & LISTENING...")
     print("==========================================")
     
-    # Bot polling start karein (Conflict fix ke liye drop_pending_updates=True joda gaya hai)
+    # Conflict fix: Purana webhook saaf karke polling start karega
     await application.initialize()
+    await application.bot.delete_webhook(drop_pending_updates=True)
     await application.start()
-    await application.updater.start_polling(drop_pending_updates=True)
+    await application.updater.start_polling()
     
     # App ko band hone se rokne ke liye
     await asyncio.Event().wait()
