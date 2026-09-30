@@ -1,6 +1,7 @@
 import asyncio
 import os
 from aiohttp import web
+from telegram.ext import Application # Agar python-telegram-bot use kar rahe hain
 
 async def health(request):
     return web.Response(text="India Vehicle OCR Bot running")
@@ -17,18 +18,25 @@ async def start_web_server():
     await site.start()
     print(f"[SERVER] Running on {port}")
 
-# Main function jisme web server aur bot dono ek sath chalenge
 async def main():
-    # 1. Pehle Web Server start ho jo Render ka port pakad le
+    # 1. Pehle web server start ho jo Render ka port pakad lega
     await start_web_server()
     
-    # 2. Phir yahan aapka Telegram bot start hona chahiye (jaise application.run_polling() ya jo bhi aapka bot start method ho)
-    # Example:
-    # await application.initialize()
-    # await application.start()
-    # await application.updater.start_polling()
+    # 2. Yahan apna Bot Token daalein (ya os.environ se uthayein)
+    TOKEN = os.environ.get("BOT_TOKEN", "AAPKA_BOT_TOKEN_YAHAN")
     
-    # Infinite loop taaki app band na ho
+    application = Application.builder().token(TOKEN).build()
+    
+    # (Yahan apne handlers add kar dena, jaise photo handler)
+    
+    print("[BOT] RUNNING & LISTENING...")
+    
+    # 3. Bot ko start karne ka sahi async tarika
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling()
+    
+    # App ko chalaye rakhne ke liye
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
