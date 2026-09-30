@@ -1,16 +1,10 @@
 import asyncio
 import os
 import re
-import cv2
-import easyocr
+import requests
 from aiohttp import web
 from telegram import Update
 from telegram.ext import Application, ContextTypes, MessageHandler, CommandHandler, filters
-
-# Initialize EasyOCR Reader (Hindi/English ke liye)
-print("[INFO] Loading EasyOCR Model...")
-reader = easyocr.Reader(['en'], gpu=False)
-print("[INFO] EasyOCR Model Loaded!")
 
 # 1. Render Health Check Server
 async def health(request):
@@ -28,7 +22,7 @@ async def start_web_server():
     await site.start()
     print(f"[SERVER] Running on {port}")
 
-# 2. RTO Database
+# 2. RTO Database Mapping
 RTO_DB = {
     "UP": "Uttar Pradesh", "DL": "Delhi", "MH": "Maharashtra", "KA": "Karnataka",
     "TN": "Tamil Nadu", "GJ": "Gujarat", "RJ": "Rajasthan", "MP": "Madhya Pradesh",
@@ -42,7 +36,8 @@ RTO_DISTRICTS = {
     "UP14": "Ghaziabad, Uttar Pradesh",
     "DL01": "Delhi (Civil Lines)",
     "MH01": "Mumbai Central, Maharashtra",
-    "KA01": "Bangalore Central, Karnataka"
+    "KA01": "Bangalore Central, Karnataka",
+    "GJ01": "Ahmedabad, Gujarat"
 }
 
 def get_rto_info(plate_text):
@@ -59,50 +54,57 @@ def get_rto_info(plate_text):
         if code in clean_text:
             return clean_text, location
             
-    return clean_text, "India (General)"
+    return clean_text, "India (General Location)"
 
-# 3. EasyOCR Plate Extraction
-def extract_plate_easyocr(image_path):
-    img = cv2.imread(image_path)
-    if img is None:
-        return "", ""
+# 3. Cloud OCR API Function (Lightweight & Free)
+def extract_plate_cloud(image_path):
+    url = "https://api.ocr.space/parse/image"
     
-    # EasyOCR direct image par bahut accha kaam karta hai
-    results = reader.readtext(img)
-    
-    combined_text = ""
-    for (bbox, text, prob) in results:
-        if prob > 0.2: # Confidence threshold
-            combined_text += " " + text
+    with open(image_path, 'rb') as f:
+        payload = {
+            'isOverlayRequired': False,
+            'apikey': 'helloworld', # Free public OCR.space API key
+            'language': 'eng',
+            'scale': True,
+            'OCREngine': 2 # Engine 2 handles vehicle plates much better
+        }
+        files = {'filename': f}
+        try:
+            response = requests.post(url, data=payload, files=files, timeout=10)
+            result = response.json()
             
-    plate, location = get_rto_info(combined_text)
-    if len(plate) >= 6:
-        return plate, location
-        
+            if result.get('ParsedResults'):
+                parsed_text = result['ParsedResults'][0].get('ParsedText', '')
+                plate, location = get_rto_info(parsed_text)
+                if len(plate) >= 6:
+                    return plate, location
+        except Exception as e:
+            print(f"[OCR ERROR] {e}")
+            
     return "", ""
 
 # 4. Telegram Handlers
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Namaste! Main India Vehicle OCR & RTO Bot hoon.\n\n"
-        "🚗 Ab maine **EasyOCR** upgrade kar liya hai! Aap chahe jaisi bhi photo bhejein, yeh turant number plate aur RTO location bata dega."
+        "🚗 Mujhe gaadi ki photo bhejein, main turant number plate aur RTO city ki details bataunga!"
     )
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text("🔍 Photo scan ki ja rahi hai...")
+    msg = await update.message.reply_text("🔍 Cloud OCR ke zariye photo scan ki ja rahi hai...")
     
     photo = update.message.photo[-1]
     file = await context.bot.get_file(photo.file_id)
     file_path = "temp_plate.jpg"
     await file.download_to_drive(file_path)
     
-    plate_text, location = extract_plate_easyocr(file_path)
+    plate_text, location = extract_plate_cloud(file_path)
     
     if plate_text:
         await msg.edit_text(
             f"✅ **Number Plate Detected!**\n\n"
             f"🚗 Plate: `{plate_text}`\n"
-            f"📍 Location: **{location}**"
+            f"📍 RTO Location: **{location}**"
         )
     else:
         await msg.edit_text("❌ Number plate read nahi ho payi. Kripya thodi aur saaf photo bhejein.")
@@ -124,7 +126,7 @@ async def main():
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     
-    print("[BOT] RUNNING WITH EASYOCR...")
+    print("[BOT] RUNNING WITH CLOUD OCR (Free Tier Friendly)...")
     
     await application.initialize()
     await application.bot.delete_webhook(drop_pending_updates=True)
