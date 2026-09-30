@@ -21,7 +21,7 @@ async def start_web_server():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    print(f"[SERVER] Running on {port}")
+    print(f"[SERVER] Running on port {port}")
 
 # 2. Comprehensive RTO Database Mapping
 RTO_DB = {
@@ -38,7 +38,6 @@ RTO_DISTRICTS = {
     "UP32": "Lucknow, Uttar Pradesh",
     "UP16": "Gautam Buddh Nagar (Noida), Uttar Pradesh",
     "UP14": "Ghaziabad, Uttar Pradesh",
-    "UP01": "Dehradun, Uttarakhand", # Just an example
     "DL01": "Delhi (Civil Lines)",
     "DL02": "Delhi (Civil Lines)",
     "MH01": "Mumbai Central, Maharashtra",
@@ -150,7 +149,8 @@ async def main():
     await application.start()
     await application.updater.start_polling()
     
-    asyncio.Event().wait()
+    # Yeh line ab bilkul theek hai (await ke sath)
+    await asyncio.Event().wait()
 
 if __name__ == "__main__":
     asyncio.run(main())
